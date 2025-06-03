@@ -4,17 +4,17 @@ from bs4 import BeautifulSoup
 from pyairtable import Api
 from urllib.parse import urljoin, urlparse
 import logging
-from datetime import datetime # Import datetime for date parsing
+from datetime import datetime
 
 # --- Configuration ---
 AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
 BASE_ID = "appoz4aD0Hjolycwd"
 TABLE_ID = "tbl7VYAVYoO9ySh0u"
 
-# Airtable Field IDs (good practice to use these if they are stable)
+# Airtable Field IDs
 FIELD_CATEGORY = "fldAHCnq8IqIaRbHD"
 FIELD_TITLE = "fldlUm4FqOpdD2RCj"
-FIELD_PUBLICATION_DATE = "fldNiEGA9hBHpW4ah" # Ensure this is a Date field in Airtable
+FIELD_PUBLICATION_DATE = "fldNiEGA9hBHpW4ah"
 FIELD_AUTHOR = "fldw2dqoOXGxkkmgQ"
 FIELD_SUMMARY = "fldK0gBQFV5DPgQn9"
 FIELD_ARTICLE_URL = "fld6Uhrx1CzOWEZZT"
@@ -22,11 +22,11 @@ FIELD_IMAGE_URL = "fldnGyY3zX7aDhG6d"
 
 BASE_URL = "https://knowledge.insead.edu"
 
-# Logging setup
+# Logging setup - Temporarily set to DEBUG to get more detailed output
 logging.basicConfig(
     filename='insead_scrape.log',
     filemode='w',
-    level=logging.INFO,
+    level=logging.DEBUG, # <--- Changed to DEBUG for detailed diagnosis
     format='%(asctime)s [%(levelname)s] %(message)s'
 )
 
@@ -46,32 +46,43 @@ def extract_publication_date(article_url):
     Uses cloudscraper to handle potential Cloudflare protection on article pages.
     """
     try:
-        logging.debug(f"Visiting article page to extract date: {article_url}")
-        # Use scraper for individual article pages too
+        logging.debug(f"Attempting to fetch article page for date: {article_url}") # Debugging fetch attempt
         res = scraper.get(article_url, timeout=15)
-        res.raise_for_status() # Raise an HTTPError for bad responses (4xx or 5xx)
         
+        if res.status_code != 200:
+            logging.error(f"Failed to load article page {article_url} for date (Status: {res.status_code}).")
+            # Optional: Save HTML of problematic page for manual inspection
+            # with open(f"failed_date_page_{urlparse(article_url).path.replace('/', '_').strip('.html')}.html", "w", encoding="utf-8") as f:
+            #     f.write(res.text)
+            return None
+        
+        logging.debug(f"Successfully fetched article page {article_url} (Status: {res.status_code}). Parsing HTML for date.")
         soup = BeautifulSoup(res.content, "html.parser")
-        date_tag = soup.select_one("a.link.link--date") # Selector for the date tag
+        
+        # Selector for the date tag
+        date_tag = soup.select_one("a.link.link--date") 
 
         if date_tag:
             date_str = date_tag.get_text(strip=True)
+            logging.debug(f"Found potential date string: '{date_str}' for {article_url}")
             try:
                 # Parse the date string (e.g., "02 Jun 2025")
-                # %d: day, %b: abbreviated month name, %Y: full year
                 date_object = datetime.strptime(date_str, "%d %b %Y")
                 # Format to ISO 8601 (YYYY-MM-DD)
                 iso_date = date_object.strftime("%Y-%m-%d")
-                logging.debug(f"Extracted and formatted date: {date_str} -> {iso_date}")
+                logging.debug(f"Successfully parsed and formatted date: '{date_str}' -> '{iso_date}'")
                 return iso_date
             except ValueError as ve:
-                logging.error(f"Failed to parse date string '{date_str}' from {article_url}: {ve}")
+                logging.error(f"Failed to parse date string '{date_str}' from {article_url} into '%d %b %Y' format: {ve}", exc_info=True)
                 return None
-        
-        logging.warning(f"Publication date tag 'a.link.link--date' not found for {article_url}")
-        return None
+        else:
+            logging.warning(f"Publication date tag 'a.link.link--date' NOT found for {article_url}. HTML structure might have changed or element is missing.")
+            # Optional: Save HTML of page where date tag wasn't found
+            # with open(f"no_date_tag_found_{urlparse(article_url).path.replace('/', '_').strip('.html')}.html", "w", encoding="utf-8") as f:
+            #     f.write(res.text)
+            return None
     except Exception as e:
-        logging.error(f"Error fetching article page for date extraction ({article_url}): {e}", exc_info=True)
+        logging.error(f"General error during date extraction for {article_url}: {e}", exc_info=True)
         return None
 
 # --- Main Scraper Logic ---
@@ -91,7 +102,6 @@ def main():
     existing_urls = set()
     try:
         logging.info("Fetching existing article URLs from Airtable...")
-        # Removed 'view="All articles"' as it caused "View not found" error previously
         for record in table.all(): 
             url = record.get("fields", {}).get("Article URL")
             if url:
@@ -103,7 +113,7 @@ def main():
         return
 
     # Scrape INSEAD homepage using cloudscraper
-    article_cards = [] # Initialize outside try block
+    article_cards = [] 
     try:
         logging.info(f"Attempting to fetch homepage: {BASE_URL}")
         response = scraper.get(BASE_URL, timeout=30)
@@ -122,7 +132,7 @@ def main():
     skipped_duplicates_count = 0
 
     for card in article_cards:
-        current_article_url = "N/A" # For better error logging if URL extraction fails
+        current_article_url = "N/A" 
         try:
             list_object_element = card.select_one("div.list-object")
             if not list_object_element:
@@ -178,11 +188,11 @@ def main():
                 FIELD_AUTHOR: author_text,
             }
             if pub_date:
-                record_fields[FIELD_PUBLICATION_DATE] = pub_date # Add date if found and formatted
+                record_fields[FIELD_PUBLICATION_DATE] = pub_date
 
             # Add record to Airtable
             table.create(record_fields)
-            existing_urls.add(current_article_url) # Add to set to prevent re-adding in current run
+            existing_urls.add(current_article_url)
             logging.info(f"✅ ADDED: '{title}' by {author_text} (Date: {pub_date if pub_date else 'N/A'})")
             added_count += 1
 
