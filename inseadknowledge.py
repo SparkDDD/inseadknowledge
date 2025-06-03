@@ -49,6 +49,7 @@ def main():
     api = Api(AIRTABLE_API_KEY)
     table = api.table(BASE_ID, TABLE_ID)
 
+    # Load existing URLs
     existing_urls = set()
     for record in table.all():
         url = record.get("fields", {}).get("Article URL")
@@ -73,8 +74,6 @@ def main():
             logging.warning(f"⚠️ Cookie banner not handled: {e}")
 
         html = page.content()
-
-        # Save for debugging
         with open("debug.html", "w", encoding="utf-8") as f:
             f.write(html)
 
@@ -91,7 +90,7 @@ def main():
                     continue
 
                 article_url = normalize_url(urljoin("https://knowledge.insead.edu/", link_tag["href"]))
-                logging.info(f"FOUND ARTICLE: {article_url}")
+                logging.info(f"➡️ Processing: {article_url}")
 
                 if article_url in existing_urls:
                     logging.info(f"SKIPPED (already exists): {article_url}")
@@ -104,7 +103,6 @@ def main():
                 img_tag = article.select_one("picture img")
 
                 image_url = img_tag.get("src") or img_tag.get("data-src") if img_tag else ""
-
                 pub_date = extract_publication_date(page, article_url)
 
                 record = {
@@ -118,9 +116,14 @@ def main():
                 if pub_date:
                     record[FIELD_PUBLICATION_DATE] = pub_date
 
-                table.create(record)
-                logging.info(f"✅ ADDED: {title}")
-                added += 1
+                logging.info(f"📦 Record to create:\n{record}")
+
+                try:
+                    table.create(record)
+                    logging.info(f"✅ ADDED: {title}")
+                    added += 1
+                except Exception as e:
+                    logging.error(f"❌ Airtable insert failed: {e}")
             except Exception as e:
                 logging.error(f"❌ Failed to process article: {e}")
 
