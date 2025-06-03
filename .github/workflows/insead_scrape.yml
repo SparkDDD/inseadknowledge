@@ -28,3 +28,11 @@ jobs:
 
       - name: Run scraper script
         run: python inseadknowledge.py
+
+        - name: Upload debug.html for inspection
+          uses: actions/upload-artifact@v4
+          with:
+            name: debug-page
+            path: debug.html
+
+
