@@ -1,0 +1,30 @@
+name: INSEAD Scraper
+
+on:
+  
+  workflow_dispatch:      # Allows manual trigger
+
+jobs:
+  run-scraper:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install beautifulsoup4 pyairtable playwright
+
+      - name: Install Playwright Chromium
+        run: |
+          python -m playwright install --with-deps chromium
+
+      - name: Run scraper script
+        run: python YOUR_SCRIPT_NAME.py
