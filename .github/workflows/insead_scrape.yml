@@ -1,35 +1,35 @@
-name: INSEAD Scraper
+# .github/workflows/scrape.yml
+name: Scrape INSEAD Knowledge
 
 on:
-  workflow_dispatch:      # Allows manual trigger
+  workflow_dispatch: # Allows manual trigger from GitHub Actions tab
+
 
 jobs:
-  run-scraper:
+  scrape_and_update_airtable:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v3
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.x' # Use a recent Python version
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install beautifulsoup4 pyairtable playwright
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install beautifulsoup4 pyairtable cloudscraper
 
-      - name: Install Playwright Chromium
-        run: |
-          python -m playwright install --with-deps chromium
-
-      - name: Run scraper script
-        run: python inseadknowledge.py
-
-      - name: Upload debug.html for inspection
-        uses: actions/upload-artifact@v4
-        with:
-          name: debug-page
-          path: debug.html
+    - name: Run scraper script
+      env:
+        AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }} # Access the secret here
+      run: |
+        python your_script_name.py # Replace 'your_script_name.py' with the actual name of your Python file
+        # Optional: Upload logs as an artifact for debugging
+        # uses: actions/upload-artifact@v4
+        # with:
+        #   name: scrape-logs
+        #   path: insead_scrape.log
