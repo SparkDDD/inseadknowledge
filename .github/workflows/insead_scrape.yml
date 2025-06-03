@@ -27,7 +27,7 @@ jobs:
       env:
         AIRTABLE_API_KEY: ${{ secrets.AIRTABLE_API_KEY }} # Access the secret here
       run: |
-        python your_script_name.py # Replace 'your_script_name.py' with the actual name of your Python file
+        python inseadknowledge.py # Replace 'your_script_name.py' with the actual name of your Python file
         # Optional: Upload logs as an artifact for debugging
         # uses: actions/upload-artifact@v4
         # with:
