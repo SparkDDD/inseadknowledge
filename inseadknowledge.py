@@ -1,5 +1,6 @@
 import subprocess
 import logging
+import time
 from bs4 import BeautifulSoup
 from pyairtable import Api
 from urllib.parse import urljoin, urlparse
@@ -59,12 +60,20 @@ def main():
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto("https://knowledge.insead.edu/")
-        page.wait_for_selector("article.list-object")
+        page.wait_for_load_state("networkidle")
+        time.sleep(2)  # buffer in case more JS content is loading
 
-        soup = BeautifulSoup(page.content(), "html.parser")
+        html = page.content()
+
+    # Save page for inspection
+        with open("debug.html", "w", encoding="utf-8") as f:
+            f.write(html)
+        logging.info("Saved page content to debug.html")
+
+        soup = BeautifulSoup(html, "html.parser")
         articles = soup.select("article.list-object")
         logging.info(f"Found {len(articles)} article blocks.")
-
+    
         added = 0
         for article in articles:
             try:
