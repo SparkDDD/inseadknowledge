@@ -1,12 +1,12 @@
 import subprocess
 import logging
+import os
 import time
-from bs4 import BeautifulSoup
 from pyairtable import Api
 from urllib.parse import urljoin, urlparse
 from playwright.sync_api import sync_playwright
 
-# Automatically install the Chromium browser if missing
+# Install Chromium
 subprocess.run(["playwright", "install", "chromium"])
 
 # Airtable config
@@ -22,6 +22,8 @@ FIELD_SUMMARY = "fldK0gBQFV5DPgQn9"
 FIELD_ARTICLE_URL = "fld6Uhrx1CzOWEZZT"
 FIELD_IMAGE_URL = "fldnGyY3zX7aDhG6d"
 
+DRY_RUN = os.getenv("DRY_RUN", "false").lower() == "true"
+
 logging.basicConfig(
     filename="insead_scrape.log",
     filemode="w",
@@ -33,33 +35,45 @@ def normalize_url(url):
     parsed = urlparse(url)
     return f"{parsed.scheme}://{parsed.netloc}{parsed.path}".rstrip("/")
 
-def extract_publication_date(page, url):
+def extract_publication_date(context, url):
     try:
-        page.goto(url)
+        page = context.new_page()
+        page.goto(url, timeout=10000)
         page.wait_for_timeout(2000)
-        soup = BeautifulSoup(page.content(), "html.parser")
-        date_tag = soup.select_one("a.link.link--date")
-        return date_tag.get_text(strip=True) if date_tag else None
+        date = page.locator("a.link.link--date").inner_text(timeout=2000)
+        page.close()
+        return date
     except Exception as e:
-        logging.error(f"❌ Failed to extract date from {url}: {e}")
+        logging.warning(f"❌ Failed to extract pub date from {url}: {e}")
         return None
 
+def safe_airtable_insert(table, record, retries=3):
+    for i in range(retries):
+        try:
+            return table.create(record)
+        except Exception as e:
+            logging.warning(f"⚠️ Airtable insert failed (try {i+1}): {e}")
+            time.sleep(2)
+    logging.error("❌ Final Airtable insert failed.")
+    return None
+
 def main():
-    logging.info("Script started.")
+    logging.info("🔄 Script started.")
     api = Api(AIRTABLE_API_KEY)
     table = api.table(BASE_ID, TABLE_ID)
 
-    # Load existing URLs
+    # Collect existing URLs
     existing_urls = set()
     for record in table.all():
         url = record.get("fields", {}).get("Article URL")
         if url:
             existing_urls.add(normalize_url(url))
-    logging.info(f"Found {len(existing_urls)} existing articles.")
+    logging.info(f"📌 Loaded {len(existing_urls)} existing records.")
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
+        context = browser.new_context()
+        page = context.new_page()
         page.goto("https://knowledge.insead.edu/")
         page.wait_for_load_state("networkidle")
         time.sleep(2)
@@ -69,67 +83,70 @@ def main():
             if page.locator("button:has-text('Accept all cookies')").is_visible():
                 page.click("button:has-text('Accept all cookies')")
                 page.wait_for_timeout(1000)
-                logging.info("✅ Accepted cookie consent.")
+                logging.info("✅ Accepted cookies.")
         except Exception as e:
-            logging.warning(f"⚠️ Cookie banner not handled: {e}")
+            logging.warning(f"⚠️ Cookie banner handling failed: {e}")
 
+        # Save debug
         html = page.content()
         with open("debug.html", "w", encoding="utf-8") as f:
             f.write(html)
 
-        soup = BeautifulSoup(html, "html.parser")
-        articles = soup.select("article.list-object")
-        logging.info(f"Found {len(articles)} article blocks.")
+        # Parse articles using Playwright
+        articles = page.locator("article.list-object")
+        count = articles.count()
+        logging.info(f"🔍 Found {count} article blocks.")
 
         added = 0
-        for article in articles:
+        skipped = 0
+        for i in range(count):
             try:
-                link_tag = article.select_one("a.list-object__heading-link")
-                if not link_tag:
-                    logging.info("SKIPPED: No link tag found.")
-                    continue
-
-                article_url = normalize_url(urljoin("https://knowledge.insead.edu/", link_tag["href"]))
-                logging.info(f"➡️ Processing: {article_url}")
+                article = articles.nth(i)
+                link = article.locator("a.list-object__heading-link")
+                article_url = normalize_url(urljoin("https://knowledge.insead.edu/", link.get_attribute("href")))
+                title = link.inner_text().strip()
 
                 if article_url in existing_urls:
-                    logging.info(f"SKIPPED (already exists): {article_url}")
+                    logging.info(f"⏭️ Skipped existing: {article_url}")
+                    skipped += 1
                     continue
 
-                title = link_tag.get_text(strip=True)
-                category = article.select_one(".list-object__category")
-                summary = article.select_one(".list-object__description")
-                author = article.select_one(".list-object__author")
-                img_tag = article.select_one("picture img")
+                category = article.locator(".list-object__category").inner_text(timeout=1000) or ""
+                summary = article.locator(".list-object__description").inner_text(timeout=1000) or ""
+                author = article.locator(".list-object__author").inner_text(timeout=1000) or ""
+                img_tag = article.locator("picture img")
+                image_url = img_tag.get_attribute("src") or img_tag.get_attribute("data-src") or ""
 
-                image_url = img_tag.get("src") or img_tag.get("data-src") if img_tag else ""
-                pub_date = extract_publication_date(page, article_url)
+                pub_date = extract_publication_date(context, article_url)
 
                 record = {
                     FIELD_TITLE: title,
                     FIELD_ARTICLE_URL: article_url,
                     FIELD_IMAGE_URL: image_url,
-                    FIELD_CATEGORY: category.get_text(strip=True) if category else "",
-                    FIELD_SUMMARY: summary.get_text(strip=True) if summary else "",
-                    FIELD_AUTHOR: author.get_text(strip=True) if author else "",
+                    FIELD_CATEGORY: category,
+                    FIELD_SUMMARY: summary,
+                    FIELD_AUTHOR: author,
                 }
                 if pub_date:
                     record[FIELD_PUBLICATION_DATE] = pub_date
 
-                logging.info(f"📦 Record to create:\n{record}")
+                logging.info(f"📦 Record:\n{record}")
 
-                try:
-                    table.create(record)
-                    logging.info(f"✅ ADDED: {title}")
+                if not DRY_RUN:
+                    result = safe_airtable_insert(table, record)
+                    if result:
+                        logging.info(f"✅ Added: {title}")
+                        added += 1
+                else:
+                    print(f"[DRY RUN] Would insert: {record}")
                     added += 1
-                except Exception as e:
-                    logging.error(f"❌ Airtable insert failed: {e}")
+
             except Exception as e:
                 logging.error(f"❌ Failed to process article: {e}")
 
         browser.close()
-        logging.info(f"✅ Finished. {added} new article(s) added.")
-        print(f"✅ Done. {added} new article(s) added.")
+        logging.info(f"🏁 Done. Added: {added}, Skipped: {skipped}, Total: {count}")
+        print(f"✅ Done. Added: {added}, Skipped: {skipped}, Total: {count}")
 
 if __name__ == "__main__":
     main()
