@@ -84,7 +84,7 @@ def main():
     existing_urls = set()
     try:
         logging.info("Fetching existing article URLs from Airtable...")
-        for record in table.all(view="All articles"): # Use a specific view if needed, or 'all()' by default
+        for record in table.all():
             url = record.get("fields", {}).get("Article URL")
             if url:
                 existing_urls.add(normalize_url(url))
