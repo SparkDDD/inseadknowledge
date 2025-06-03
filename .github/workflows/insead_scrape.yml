@@ -2,7 +2,9 @@
 name: Scrape INSEAD Knowledge
 
 on:
-  workflow_dispatch: # Allows manual trigger from GitHub Actions tab
+  schedule:
+  - cron: '0 */6 * * *'  # Every 6 hours (UTC)
+  workflow_dispatch:       # Allow manual trigger
 
 
 jobs:
