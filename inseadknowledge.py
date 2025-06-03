@@ -1,12 +1,11 @@
 import subprocess
 import logging
-import os
 import time
 from pyairtable import Api
 from urllib.parse import urljoin, urlparse
 from playwright.sync_api import sync_playwright
 
-# Install Chromium
+# Ensure Chromium is available
 subprocess.run(["playwright", "install", "chromium"])
 
 # Airtable config
@@ -22,8 +21,7 @@ FIELD_SUMMARY = "fldK0gBQFV5DPgQn9"
 FIELD_ARTICLE_URL = "fld6Uhrx1CzOWEZZT"
 FIELD_IMAGE_URL = "fldnGyY3zX7aDhG6d"
 
-DRY_RUN = os.getenv("DRY_RUN", "false").lower() == "true"
-
+# Logging setup
 logging.basicConfig(
     filename="insead_scrape.log",
     filemode="w",
@@ -44,7 +42,7 @@ def extract_publication_date(context, url):
         page.close()
         return date
     except Exception as e:
-        logging.warning(f"❌ Failed to extract pub date from {url}: {e}")
+        logging.warning(f"❌ Failed to extract date from {url}: {e}")
         return None
 
 def safe_airtable_insert(table, record, retries=3):
@@ -58,11 +56,11 @@ def safe_airtable_insert(table, record, retries=3):
     return None
 
 def main():
-    logging.info("🔄 Script started.")
+    logging.info("🚀 Script started.")
     api = Api(AIRTABLE_API_KEY)
     table = api.table(BASE_ID, TABLE_ID)
 
-    # Collect existing URLs
+    # Existing article URLs
     existing_urls = set()
     for record in table.all():
         url = record.get("fields", {}).get("Article URL")
@@ -78,21 +76,21 @@ def main():
         page.wait_for_load_state("networkidle")
         time.sleep(2)
 
-        # Accept cookies
+        # Accept cookies if visible
         try:
-            if page.locator("button:has-text('Accept all cookies')").is_visible():
-                page.click("button:has-text('Accept all cookies')")
+            cookie_btn = page.locator("button:has-text('Accept all cookies')")
+            if cookie_btn.is_visible():
+                cookie_btn.click()
                 page.wait_for_timeout(1000)
-                logging.info("✅ Accepted cookies.")
+                logging.info("✅ Cookies accepted.")
         except Exception as e:
-            logging.warning(f"⚠️ Cookie banner handling failed: {e}")
+            logging.warning(f"⚠️ Cookie banner failed: {e}")
 
-        # Save debug
-        html = page.content()
+        # Save debug page
         with open("debug.html", "w", encoding="utf-8") as f:
-            f.write(html)
+            f.write(page.content())
 
-        # Parse articles using Playwright
+        # Start parsing articles
         articles = page.locator("article.list-object")
         count = articles.count()
         logging.info(f"🔍 Found {count} article blocks.")
@@ -103,17 +101,21 @@ def main():
             try:
                 article = articles.nth(i)
                 link = article.locator("a.list-object__heading-link")
-                article_url = normalize_url(urljoin("https://knowledge.insead.edu/", link.get_attribute("href")))
-                title = link.inner_text().strip()
+                href = link.get_attribute("href")
+                if not href:
+                    logging.info("⚠️ Skipped article with no href.")
+                    continue
 
+                article_url = normalize_url(urljoin("https://knowledge.insead.edu/", href))
                 if article_url in existing_urls:
                     logging.info(f"⏭️ Skipped existing: {article_url}")
                     skipped += 1
                     continue
 
-                category = article.locator(".list-object__category").inner_text(timeout=1000) or ""
-                summary = article.locator(".list-object__description").inner_text(timeout=1000) or ""
-                author = article.locator(".list-object__author").inner_text(timeout=1000) or ""
+                title = link.inner_text().strip()
+                category = article.locator(".list-object__category").inner_text(timeout=1000)
+                summary = article.locator(".list-object__description").inner_text(timeout=1000)
+                author = article.locator(".list-object__author").inner_text(timeout=1000)
                 img_tag = article.locator("picture img")
                 image_url = img_tag.get_attribute("src") or img_tag.get_attribute("data-src") or ""
 
@@ -130,19 +132,14 @@ def main():
                 if pub_date:
                     record[FIELD_PUBLICATION_DATE] = pub_date
 
-                logging.info(f"📦 Record:\n{record}")
-
-                if not DRY_RUN:
-                    result = safe_airtable_insert(table, record)
-                    if result:
-                        logging.info(f"✅ Added: {title}")
-                        added += 1
-                else:
-                    print(f"[DRY RUN] Would insert: {record}")
+                logging.info(f"📦 Inserting:\n{record}")
+                result = safe_airtable_insert(table, record)
+                if result:
+                    logging.info(f"✅ Added: {title}")
                     added += 1
 
             except Exception as e:
-                logging.error(f"❌ Failed to process article: {e}")
+                logging.error(f"❌ Error processing article #{i}: {e}")
 
         browser.close()
         logging.info(f"🏁 Done. Added: {added}, Skipped: {skipped}, Total: {count}")
