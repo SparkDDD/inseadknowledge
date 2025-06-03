@@ -61,19 +61,27 @@ def main():
         page = browser.new_page()
         page.goto("https://knowledge.insead.edu/")
         page.wait_for_load_state("networkidle")
-        time.sleep(2)  # buffer in case more JS content is loading
+        time.sleep(2)
+
+        # Accept cookies
+        try:
+            if page.locator("button:has-text('Accept all cookies')").is_visible():
+                page.click("button:has-text('Accept all cookies')")
+                page.wait_for_timeout(1000)
+                logging.info("✅ Accepted cookie consent.")
+        except Exception as e:
+            logging.warning(f"⚠️ Cookie banner not handled: {e}")
 
         html = page.content()
 
-    # Save page for inspection
+        # Save for debugging
         with open("debug.html", "w", encoding="utf-8") as f:
             f.write(html)
-        logging.info("Saved page content to debug.html")
 
         soup = BeautifulSoup(html, "html.parser")
         articles = soup.select("article.list-object")
         logging.info(f"Found {len(articles)} article blocks.")
-    
+
         added = 0
         for article in articles:
             try:
