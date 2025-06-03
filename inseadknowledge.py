@@ -73,6 +73,7 @@ def main():
                     continue
                 article_url = normalize_url(urljoin("https://knowledge.insead.edu/", link_tag["href"]))
                 if article_url in existing_urls:
+                    logging.info(f"SKIPPED (already exists): {article_url}")
                     continue
 
                 title = link_tag.get_text(strip=True)
