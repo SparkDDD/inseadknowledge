@@ -1,13 +1,12 @@
 import os
-import cloudscraper # Import cloudscraper
+import cloudscraper
 from bs4 import BeautifulSoup
 from pyairtable import Api
 from urllib.parse import urljoin, urlparse
 import logging
+from datetime import datetime # Import datetime for date parsing
 
 # --- Configuration ---
-# It's CRITICAL to load sensitive information like API keys from environment variables
-# when running on platforms like GitHub Actions, not hardcode them.
 AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
 BASE_ID = "appoz4aD0Hjolycwd"
 TABLE_ID = "tbl7VYAVYoO9ySh0u"
@@ -15,7 +14,7 @@ TABLE_ID = "tbl7VYAVYoO9ySh0u"
 # Airtable Field IDs (good practice to use these if they are stable)
 FIELD_CATEGORY = "fldAHCnq8IqIaRbHD"
 FIELD_TITLE = "fldlUm4FqOpdD2RCj"
-FIELD_PUBLICATION_DATE = "fldNiEGA9hBHpW4ah"
+FIELD_PUBLICATION_DATE = "fldNiEGA9hBHpW4ah" # Ensure this is a Date field in Airtable
 FIELD_AUTHOR = "fldw2dqoOXGxkkmgQ"
 FIELD_SUMMARY = "fldK0gBQFV5DPgQn9"
 FIELD_ARTICLE_URL = "fld6Uhrx1CzOWEZZT"
@@ -27,7 +26,7 @@ BASE_URL = "https://knowledge.insead.edu"
 logging.basicConfig(
     filename='insead_scrape.log',
     filemode='w',
-    level=logging.INFO, # Set to INFO for less verbose logs unless debugging
+    level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s'
 )
 
@@ -43,7 +42,7 @@ def normalize_url(url):
 
 def extract_publication_date(article_url):
     """
-    Visits an individual article page to extract the publication date.
+    Visits an individual article page to extract the publication date and format it to ISO 8601.
     Uses cloudscraper to handle potential Cloudflare protection on article pages.
     """
     try:
@@ -56,15 +55,23 @@ def extract_publication_date(article_url):
         date_tag = soup.select_one("a.link.link--date") # Selector for the date tag
 
         if date_tag:
-            return date_tag.get_text(strip=True)
+            date_str = date_tag.get_text(strip=True)
+            try:
+                # Parse the date string (e.g., "02 Jun 2025")
+                # %d: day, %b: abbreviated month name, %Y: full year
+                date_object = datetime.strptime(date_str, "%d %b %Y")
+                # Format to ISO 8601 (YYYY-MM-DD)
+                iso_date = date_object.strftime("%Y-%m-%d")
+                logging.debug(f"Extracted and formatted date: {date_str} -> {iso_date}")
+                return iso_date
+            except ValueError as ve:
+                logging.error(f"Failed to parse date string '{date_str}' from {article_url}: {ve}")
+                return None
         
-        logging.warning(f"Publication date not found for {article_url}")
+        logging.warning(f"Publication date tag 'a.link.link--date' not found for {article_url}")
         return None
     except Exception as e:
-        logging.error(f"Error extracting date from {article_url}: {e}")
-        # Optionally, save the error page for debugging if a date isn't found due to a scrape issue
-        # with open(f"error_date_page_{urlparse(article_url).hostname}.html", "w", encoding="utf-8") as f:
-        #     f.write(res.text)
+        logging.error(f"Error fetching article page for date extraction ({article_url}): {e}", exc_info=True)
         return None
 
 # --- Main Scraper Logic ---
@@ -84,30 +91,30 @@ def main():
     existing_urls = set()
     try:
         logging.info("Fetching existing article URLs from Airtable...")
-        for record in table.all():
+        # Removed 'view="All articles"' as it caused "View not found" error previously
+        for record in table.all(): 
             url = record.get("fields", {}).get("Article URL")
             if url:
                 existing_urls.add(normalize_url(url))
         logging.info(f"Found {len(existing_urls)} existing articles in Airtable.")
     except Exception as e:
-        logging.error(f"Error loading existing records from Airtable: {e}")
+        logging.error(f"Error loading existing records from Airtable: {e}", exc_info=True)
         print(f"❌ Error loading existing records: {e}. Check Airtable config/permissions.")
         return
 
     # Scrape INSEAD homepage using cloudscraper
+    article_cards = [] # Initialize outside try block
     try:
         logging.info(f"Attempting to fetch homepage: {BASE_URL}")
-        # Use scraper for the main page
-        response = scraper.get(BASE_URL, timeout=30) # Increased timeout for main page
+        response = scraper.get(BASE_URL, timeout=30)
         response.raise_for_status()
         soup = BeautifulSoup(response.content, "html.parser")
         
-        # Using the selectors identified from previous successful run
         article_cards = soup.select("div.card-object")
         logging.info(f"Found {len(article_cards)} article cards on the homepage.")
 
     except Exception as e:
-        logging.error(f"Error fetching or parsing homepage: {e}")
+        logging.error(f"Error fetching or parsing homepage: {e}", exc_info=True)
         print(f"❌ Error fetching homepage: {e}. Check internet connection or website status.")
         return
 
@@ -115,8 +122,8 @@ def main():
     skipped_duplicates_count = 0
 
     for card in article_cards:
+        current_article_url = "N/A" # For better error logging if URL extraction fails
         try:
-            # The actual article details are often within a 'div.list-object' inside the 'card-object'
             list_object_element = card.select_one("div.list-object")
             if not list_object_element:
                 logging.debug("Skipping card: No 'list-object' found within 'card-object'.")
@@ -127,11 +134,10 @@ def main():
                 logging.debug("Skipping card: No valid link tag with href found.")
                 continue
 
-            article_url = normalize_url(urljoin(BASE_URL, link_tag['href']))
+            current_article_url = normalize_url(urljoin(BASE_URL, link_tag['href']))
             
-            # Check for duplicates before processing further
-            if article_url in existing_urls:
-                logging.debug(f"Skipping duplicate: {article_url}")
+            if current_article_url in existing_urls:
+                logging.debug(f"Skipping duplicate: {current_article_url}")
                 skipped_duplicates_count += 1
                 continue
 
@@ -150,39 +156,38 @@ def main():
             image_tag = None
             if image_figure:
                 image_tag = image_figure.select_one("picture img")
-                if not image_tag: # Fallback to direct img if picture img not found
+                if not image_tag:
                     image_tag = image_figure.select_one("img")
 
             image_url = ""
             if image_tag:
-                image_src = image_tag.get("src") or image_tag.get("data-src") # Check both src and data-src
+                image_src = image_tag.get("src") or image_tag.get("data-src")
                 if image_src:
                     image_url = urljoin(BASE_URL, image_src)
 
-            # Extract publication date by visiting the individual article page
-            pub_date = extract_publication_date(article_url)
+            # --- Extract publication date by visiting the individual article page ---
+            pub_date = extract_publication_date(current_article_url)
 
             # Prepare record for Airtable
             record_fields = {
                 FIELD_TITLE: title,
-                FIELD_ARTICLE_URL: article_url,
+                FIELD_ARTICLE_URL: current_article_url,
                 FIELD_IMAGE_URL: image_url,
                 FIELD_CATEGORY: category,
                 FIELD_SUMMARY: summary,
                 FIELD_AUTHOR: author_text,
             }
             if pub_date:
-                record_fields[FIELD_PUBLICATION_DATE] = pub_date
+                record_fields[FIELD_PUBLICATION_DATE] = pub_date # Add date if found and formatted
 
             # Add record to Airtable
             table.create(record_fields)
-            existing_urls.add(article_url) # Add to set to prevent re-adding in current run
-            logging.info(f"✅ ADDED: '{title}' by {author_text}")
+            existing_urls.add(current_article_url) # Add to set to prevent re-adding in current run
+            logging.info(f"✅ ADDED: '{title}' by {author_text} (Date: {pub_date if pub_date else 'N/A'})")
             added_count += 1
 
         except Exception as e:
-            logging.error(f"❌ Failed to process an article card (URL: {article_url if 'article_url' in locals() else 'N/A'}): {e}", exc_info=True)
-            # exc_info=True adds stack trace to the log for better debugging
+            logging.error(f"❌ Failed to process article card (URL: {current_article_url}): {e}", exc_info=True)
 
     logging.info(f"Scraper Finished. {added_count} new article(s) added. {skipped_duplicates_count} duplicates skipped.")
     print(f"✅ Done. {added_count} new articles added. {skipped_duplicates_count} duplicates skipped. See insead_scrape.log for details.")
