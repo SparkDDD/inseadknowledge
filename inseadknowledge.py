@@ -67,18 +67,18 @@ def main():
 
         added = 0
         for article in articles:
-    try:
-        link_tag = article.select_one("a.list-object__heading-link")
-        if not link_tag:
-            logging.info("SKIPPED: No link tag found.")
-            continue
+          try:
+             link_tag = article.select_one("a.list-object__heading-link")
+             if not link_tag:
+               logging.info("SKIPPED: No link tag found.")
+               continue
 
-        article_url = normalize_url(urljoin("https://knowledge.insead.edu/", link_tag["href"]))
-        logging.info(f"FOUND ARTICLE: {article_url}")
+             article_url = normalize_url(urljoin("https://knowledge.insead.edu/", link_tag["href"]))
+             logging.info(f"FOUND ARTICLE: {article_url}")
 
-        if article_url in existing_urls:
-            logging.info(f"SKIPPED (already exists): {article_url}")
-            continue
+            if article_url in existing_urls:
+              logging.info(f"SKIPPED (already exists): {article_url}")
+              continue
 
                 title = link_tag.get_text(strip=True)
                 category = article.select_one(".list-object__category")
